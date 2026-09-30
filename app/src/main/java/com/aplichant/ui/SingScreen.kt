@@ -22,6 +22,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Delete
@@ -155,11 +156,30 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
     }
 
     val busy = state.mode != Mode.IDLE
+    var showProjects by remember { mutableStateOf(false) }
+    if (showProjects) ProjectsDialog(state, vm) { showProjects = false }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Apli Chant") },
+                title = {
+                    // Nom du projet ouvert : un appui ouvre la liste des projets.
+                    Row(
+                        Modifier.clickable { showProjects = true },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f, fill = false)) {
+                            Text("Apli Chant", style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                state.projectName.ifEmpty { "Projet" },
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Icon(Icons.Filled.ArrowDropDown, contentDescription = "Changer de projet")
+                    }
+                },
                 actions = {
                     Text(
                         "v${com.aplichant.BuildConfig.VERSION_NAME}",

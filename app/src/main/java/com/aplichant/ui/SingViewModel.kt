@@ -57,7 +57,13 @@ data class Take(
     val saved: Boolean get() = name != null
 }
 
+/** Un projet = un morceau avec ses fichiers, ses paroles, son extrait et ses prises. */
+data class ProjectInfo(val id: String, val name: String)
+
 data class UiState(
+    val projectId: String = "",
+    val projectName: String = "",
+    val projects: List<ProjectInfo> = emptyList(),
     val songUri: Uri? = null,
     val songName: String? = null,
     val backingUri: Uri? = null,
@@ -101,11 +107,17 @@ private const val MAX_SOLO_MS = 10 * 60 * 1000L
 
 class SingViewModel(app: Application) : AndroidViewModel(app) {
 
+    /** Réglages communs à tous les projets (latence, volumes). */
     private val prefs = app.getSharedPreferences("aplichant", 0)
-    private val takesDir = File(app.filesDir, "takes").apply { mkdirs() }
+    /** Liste des projets et projet ouvert. */
+    private val projectsPrefs = app.getSharedPreferences("projects", 0)
+    /** Réglages du projet ouvert (fichiers, extrait, lignes cochées). */
+    private lateinit var projectPrefs: android.content.SharedPreferences
+    /** Prises du projet ouvert. */
+    private lateinit var takesDir: File
     /** Noms donnés aux prises sauvegardées (nom du fichier -> nom). */
     private val names = app.getSharedPreferences("take_names", 0)
-    /** Paroles et timings, par musique (URI -> JSON). */
+    /** Paroles et timings, par projet ("p:<id>" -> JSON ; anciennement par URI de musique). */
     private val lyricsPrefs = app.getSharedPreferences("lyrics", 0)
 
     private val _state = MutableStateFlow(UiState())
@@ -127,13 +139,139 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
                 latencyMs = prefs.getInt("latency", 100),
                 voiceVolume = prefs.getFloat("voiceVol", 1f),
                 backingVolume = prefs.getFloat("backingVol", 0.8f),
-                startMs = prefs.getLong("start", 0),
-                endMs = prefs.getLong("end", 0),
+            )
+        }
+        if (readProjects().isEmpty()) migrateToFirstProject()
+        val current = projectsPrefs.getString("current", null)?.takeIf { id -> readProjects().any { it.id == id } }
+        activateProject(current ?: readProjects().first().id)
+    }
+
+    // ---------------------------------------------------------------- Projets
+
+    private fun readProjects(): List<ProjectInfo> {
+        val json = projectsPrefs.getString("list", null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(json)
+            List(arr.length()) { i -> arr.getJSONObject(i).let { ProjectInfo(it.getString("id"), it.getString("name")) } }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun writeProjects(list: List<ProjectInfo>) {
+        val arr = JSONArray()
+        list.forEach { arr.put(JSONObject().put("id", it.id).put("name", it.name)) }
+        projectsPrefs.edit().putString("list", arr.toString()).apply()
+        _state.update { st -> st.copy(projects = list, projectName = list.firstOrNull { it.id == st.projectId }?.name ?: st.projectName) }
+    }
+
+    private fun prefsOf(id: String) = getApplication<Application>().getSharedPreferences("project_$id", 0)
+
+    private fun takesDirOf(id: String) = File(getApplication<Application>().filesDir, "takes/$id")
+
+    /** Première ouverture après la mise à jour : les réglages existants deviennent le projet 1. */
+    private fun migrateToFirstProject() {
+        val id = "p" + System.currentTimeMillis()
+        val song = prefs.getString("song", null)
+        val name = song?.let { displayName(Uri.parse(it)).substringBeforeLast('.') } ?: "Projet 1"
+        prefsOf(id).edit()
+            .putString("song", song)
+            .putString("backing", prefs.getString("backing", null))
+            .putLong("start", prefs.getLong("start", 0))
+            .putLong("end", prefs.getLong("end", 0))
+            .putBoolean("autoName", song == null)
+            .apply()
+        // Les prises existantes rejoignent ce projet.
+        val oldDir = File(getApplication<Application>().filesDir, "takes")
+        val newDir = takesDirOf(id).apply { mkdirs() }
+        oldDir.listFiles { f -> f.isFile && f.name.endsWith(".wav") }?.forEach { it.renameTo(File(newDir, it.name)) }
+        // Les paroles étaient rangées par musique : on les rattache au projet.
+        song?.let { lyricsPrefs.getString(it, null) }?.let { lyricsPrefs.edit().putString("p:$id", it).apply() }
+        writeProjects(listOf(ProjectInfo(id, name)))
+        projectsPrefs.edit().putString("current", id).apply()
+    }
+
+    /** Charge le projet [id] : fichiers, paroles, extrait, lignes cochées et prises. */
+    private fun activateProject(id: String) {
+        projectPrefs = prefsOf(id)
+        takesDir = takesDirOf(id).apply { mkdirs() }
+        cache.clear()
+        val list = readProjects()
+        val selected = projectPrefs.getString("lines", "")!!
+            .split(',').mapNotNull { it.toIntOrNull() }.toSet()
+        _state.update {
+            it.copy(
+                projectId = id,
+                projectName = list.firstOrNull { p -> p.id == id }?.name ?: "",
+                projects = list,
+                songUri = null, songName = null, backingUri = null, backingName = null,
+                songDurationMs = 0, backingDurationMs = 0, waveform = null, loadingWaveform = false,
+                startMs = projectPrefs.getLong("start", 0), endMs = projectPrefs.getLong("end", 0),
+                mode = Mode.IDLE, positionMs = null,
+                lyrics = loadLyrics(projectId = id), selectedLines = selected, syncIndex = 0,
+                takes = emptyList(), selectedTake = null,
             )
         }
         loadTakes()
-        prefs.getString("song", null)?.let { restoreFile(Uri.parse(it), isSong = true) }
-        prefs.getString("backing", null)?.let { restoreFile(Uri.parse(it), isSong = false) }
+        projectPrefs.getString("song", null)?.let { restoreFile(Uri.parse(it), isSong = true) }
+        projectPrefs.getString("backing", null)?.let { restoreFile(Uri.parse(it), isSong = false) }
+    }
+
+    /** Ouvre un autre projet (la lecture ou l'enregistrement en cours est arrêté). */
+    fun openProject(id: String) {
+        if (id == _state.value.projectId) return
+        stop()
+        viewModelScope.launch {
+            job?.join()
+            projectsPrefs.edit().putString("current", id).apply()
+            activateProject(id)
+        }
+    }
+
+    /** Crée un nouveau projet vide et l'ouvre. */
+    fun newProject(name: String) {
+        val id = "p" + System.currentTimeMillis()
+        val clean = name.trim()
+        val list = readProjects()
+        val finalName = clean.ifEmpty { "Projet ${list.size + 1}" }
+        prefsOf(id).edit().putBoolean("autoName", clean.isEmpty()).apply()
+        writeProjects(list + ProjectInfo(id, finalName))
+        openProject(id)
+    }
+
+    fun renameProject(id: String, name: String) {
+        val clean = name.trim().ifEmpty { return }
+        prefsOf(id).edit().putBoolean("autoName", false).apply()
+        writeProjects(readProjects().map { if (it.id == id) it.copy(name = clean) else it })
+    }
+
+    /** Supprime un projet et ses prises. S'il était ouvert, on ouvre un autre projet. */
+    fun deleteProject(id: String) {
+        val remaining = readProjects().filter { it.id != id }
+        val wasCurrent = id == _state.value.projectId
+        takesDirOf(id).listFiles()?.forEach { f ->
+            names.edit().remove(f.name).apply()
+            f.delete()
+        }
+        takesDirOf(id).delete()
+        prefsOf(id).edit().clear().apply()
+        lyricsPrefs.edit().remove("p:$id").apply()
+        if (remaining.isEmpty()) {
+            writeProjects(emptyList())
+            newProject("")
+            return
+        }
+        writeProjects(remaining)
+        if (wasCurrent) openProject(remaining.first().id)
+    }
+
+    /** Un projet encore nommé automatiquement prend le nom de sa musique. */
+    private fun autoNameFromSong(uri: Uri) {
+        if (!projectPrefs.getBoolean("autoName", false)) return
+        val id = _state.value.projectId
+        val name = displayName(uri).substringBeforeLast('.').ifEmpty { return }
+        writeProjects(readProjects().map { if (it.id == id) it.copy(name = name) else it })
+        projectPrefs.edit().putBoolean("autoName", false).apply()
     }
 
     // ---------------------------------------------------------------- Fichiers
@@ -148,9 +286,12 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
             )
         } catch (_: SecurityException) {
         }
-        prefs.edit().putString(if (isSong) "song" else "backing", uri.toString()).apply()
+        projectPrefs.edit().putString(if (isSong) "song" else "backing", uri.toString()).apply()
         // Nouveau fichier : on repart sur une sélection vide.
-        if (isSong) _state.update { it.copy(startMs = 0, endMs = 0) }
+        if (isSong) {
+            _state.update { it.copy(startMs = 0, endMs = 0) }
+            autoNameFromSong(uri)
+        }
         loadFile(uri, isSong, keepSelection = false)
     }
 
@@ -158,16 +299,19 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun loadFile(uri: Uri, isSong: Boolean, keepSelection: Boolean) {
         val name = displayName(uri)
+        val project = _state.value.projectId
         viewModelScope.launch {
             if (isSong) {
                 _state.update {
                     it.copy(songUri = uri, songName = name, loadingWaveform = true, waveform = null,
-                        lyrics = loadLyrics(uri), selectedLines = emptySet())
+                        lyrics = it.lyrics.ifEmpty { loadLyrics(uri) })
                 }
                 try {
                     val (wave, duration) = withContext(Dispatchers.Default) {
                         AudioDecoder.waveform(getApplication(), uri, 400)
                     }
+                    // Projet changé entre-temps : on ignore ce résultat.
+                    if (_state.value.projectId != project) return@launch
                     _state.update { it.copy(songDurationMs = duration, waveform = wave, loadingWaveform = false) }
                     fixSelection(keepSelection)
                 } catch (e: Exception) {
@@ -179,6 +323,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
             } else {
                 try {
                     val duration = withContext(Dispatchers.IO) { AudioDecoder.durationMs(getApplication(), uri) }
+                    if (_state.value.projectId != project) return@launch
                     _state.update { it.copy(backingUri = uri, backingName = name, backingDurationMs = duration) }
                     fixSelection(keepSelection)
                 } catch (e: Exception) {
@@ -217,7 +362,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
         val s = startMs.coerceIn(0, maxOf(0, total - 500))
         val e = endMs.coerceIn(s + 500, maxOf(s + 500, total))
         _state.update { it.copy(startMs = s, endMs = e) }
-        prefs.edit().putLong("start", s).putLong("end", e).apply()
+        projectPrefs.edit().putLong("start", s).putLong("end", e).apply()
     }
 
     fun nudgeStart(deltaMs: Long) = _state.value.let { setSelection(it.startMs + deltaMs, it.endMs) }
@@ -506,8 +651,11 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
 
     // ---------------------------------------------------------------- Paroles
 
-    private fun loadLyrics(uri: Uri): List<LyricLine> {
-        val json = lyricsPrefs.getString(uri.toString(), null) ?: return emptyList()
+    /** Paroles du projet ouvert, ou à défaut celles enregistrées pour la musique [uri]. */
+    private fun loadLyrics(uri: Uri? = null, projectId: String = _state.value.projectId): List<LyricLine> {
+        val json = lyricsPrefs.getString("p:$projectId", null)
+            ?: uri?.let { lyricsPrefs.getString(it.toString(), null) }
+            ?: return emptyList()
         return try {
             val arr = JSONArray(json)
             List(arr.length()) { i ->
@@ -520,10 +668,9 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun saveLyrics(lines: List<LyricLine>) {
-        val uri = _state.value.songUri ?: return
         val arr = JSONArray()
         lines.forEach { arr.put(JSONObject().put("t", it.text).put("s", it.startMs).put("e", it.endMs)) }
-        lyricsPrefs.edit().putString(uri.toString(), arr.toString()).apply()
+        lyricsPrefs.edit().putString("p:${_state.value.projectId}", arr.toString()).apply()
     }
 
     private fun updateLyrics(lines: List<LyricLine>) {
@@ -546,7 +693,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
             .filter { it.isNotEmpty() && !(it.startsWith("[") && it.endsWith("]")) }
         val sameText = lines == old.map { it.text }
         updateLyrics(if (sameText) old else lines.map { LyricLine(it) })
-        _state.update { it.copy(selectedLines = emptySet()) }
+        setSelectedLines(emptySet())
     }
 
     /** Détection automatique du timing des paroles (musique comparée au backing track). */
@@ -589,11 +736,17 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleLine(index: Int) {
         val sel = _state.value.selectedLines.toMutableSet()
         if (!sel.add(index)) sel.remove(index)
-        _state.update { it.copy(selectedLines = sel) }
+        setSelectedLines(sel)
         applyLineSelection()
     }
 
-    fun clearLineSelection() = _state.update { it.copy(selectedLines = emptySet()) }
+    fun clearLineSelection() = setSelectedLines(emptySet())
+
+    /** Lignes cochées, mémorisées dans le projet. */
+    private fun setSelectedLines(lines: Set<Int>) {
+        _state.update { it.copy(selectedLines = lines) }
+        projectPrefs.edit().putString("lines", lines.sorted().joinToString(",")).apply()
+    }
 
     private fun applyLineSelection() {
         val s = _state.value

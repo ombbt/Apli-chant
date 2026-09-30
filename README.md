@@ -4,6 +4,10 @@ Application Android pour s'entraîner au chant.
 
 ## Fonctionnalités
 
+0. **Projets** : chaque morceau est un projet (nom en haut de l'écran ; un appui ouvre la liste).
+   Un projet garde sa musique, son backing, ses paroles et leur timing, son extrait, ses lignes cochées
+   et ses prises. On peut créer, renommer, supprimer et passer d'un projet à l'autre sans rien perdre.
+   Les réglages de latence et de volumes sont communs à tous les projets.
 1. **Fichiers** : choisir une musique (MP3 ou WAV) et un backing track (MP3 ou WAV).
 2. **Paroles** : coller les paroles (une ligne par phrase chantée). « Détecter » cale automatiquement
    chaque ligne sur le morceau ; « Caler à la main » permet de corriger en appuyant au début de chaque
