@@ -157,7 +157,18 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
     val busy = state.mode != Mode.IDLE
 
     Scaffold(
-        topBar = { TopAppBar(title = { Text("Apli Chant") }) },
+        topBar = {
+            TopAppBar(
+                title = { Text("Apli Chant") },
+                actions = {
+                    Text(
+                        "v${com.aplichant.BuildConfig.VERSION_NAME}",
+                        style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(end = 16.dp),
+                    )
+                },
+            )
+        },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         Column(

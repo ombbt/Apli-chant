@@ -12,15 +12,28 @@ android {
         applicationId = "com.aplichant"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // Clé de signature fixe (versionnée) : sans elle, chaque compilation sur GitHub signerait
+    // l'APK avec une clé différente et Android refuserait d'installer la mise à jour.
+    signingConfigs {
+        create("aplichant") {
+            storeFile = file("signing.keystore")
+            storePassword = "aplichant"
+            keyAlias = "aplichant"
+            keyPassword = "aplichant"
+        }
     }
 
     buildTypes {
+        debug {
+            signingConfig = signingConfigs.getByName("aplichant")
+        }
         release {
             isMinifyEnabled = false
-            // Signé avec la clé de debug pour pouvoir installer l'APK directement.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("aplichant")
         }
     }
 
@@ -33,6 +46,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 

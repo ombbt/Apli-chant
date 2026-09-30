@@ -24,6 +24,9 @@ Les fichiers choisis et la sélection sont mémorisés d'une session à l'autre.
 choisissez la dernière exécution et téléchargez l'artefact `apli-chant-apk` (un zip contenant `app-debug.apk`).
 Copiez l'APK sur le téléphone et ouvrez-le (autorisez l'installation depuis des sources inconnues).
 
+L'APK est signé avec une clé fixe (`app/signing.keystore`), ce qui permet d'installer les nouvelles
+versions par-dessus les anciennes. Le numéro de version est affiché en haut à droite de l'application.
+
 ## Compiler soi-même
 
 Avec Android Studio (ou le SDK Android + JDK 17) :
