@@ -14,8 +14,8 @@ android {
         applicationId = "com.aplichant.app"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
     }
 
     // Clé de signature fixe (versionnée) : sans elle, chaque compilation sur GitHub signerait

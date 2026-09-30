@@ -8,6 +8,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -28,3 +30,22 @@ jobs:
         with:
           name: ${{ env.APK_NAME }}
           path: app/build/outputs/apk/debug/*.apk
+      # Publie aussi l'APK (non zippé) dans une release GitHub, téléchargeable directement
+      # depuis le téléphone avec un lien fixe : .../releases/latest/download/apli-chant.apk
+      - name: Préparer la release
+        if: github.event_name == 'push'
+        run: |
+          cp "app/build/outputs/apk/debug/${APK_NAME}.apk" apli-chant.apk
+          VERSION=$(echo "$APK_NAME" | sed -E 's/^apli-chant-(v[0-9.]+)-debug$/\1/')
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+      - uses: softprops/action-gh-release@v2
+        if: github.event_name == 'push'
+        with:
+          tag_name: ${{ env.VERSION }}
+          name: Apli Chant ${{ env.VERSION }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          overwrite_files: true
+          files: |
+            apli-chant.apk
+            app/build/outputs/apk/debug/${{ env.APK_NAME }}.apk

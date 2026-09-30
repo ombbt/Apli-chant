@@ -20,6 +20,12 @@ Les fichiers choisis et la sélection sont mémorisés d'une session à l'autre.
 
 ## Installer l'APK
 
+Le plus simple : sur le téléphone, ouvrez avec **Chrome** le lien
+https://github.com/ombbt/Apli-chant/releases/latest/download/apli-chant.apk
+puis touchez « Ouvrir » à la fin du téléchargement (autorisez Chrome à installer des applications
+si Android le demande).
+
+
 À chaque push, la GitHub Action **Build APK** compile l'application : ouvrez l'onglet *Actions* du dépôt,
 choisissez la dernière exécution et téléchargez l'artefact `apli-chant-vX.Y-debug` (un zip contenant `apli-chant-vX.Y-debug.apk`).
 Copiez l'APK sur le téléphone et ouvrez-le (autorisez l'installation depuis des sources inconnues).
