@@ -9,13 +9,13 @@ android {
     compileSdk = 35
 
     defaultConfig {
-        // Identifiant changé en v1.2 pour éviter tout conflit avec un reste des premières
-        // versions (signées avec d'autres clés) encore présent sur le téléphone.
-        applicationId = "com.aplichant.app"
+        // Identifiant neuf (v1.5) : les identifiants précédents (com.aplichant, com.aplichant.app)
+        // ont pu laisser sur le téléphone des traces signées avec d'autres clés qui bloquaient l'installation.
+        applicationId = "fr.aplichant.chant"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "1.4"
+        versionCode = 6
+        versionName = "1.5"
     }
 
     // Clé de signature fixe (versionnée) : sans elle, chaque compilation sur GitHub signerait
