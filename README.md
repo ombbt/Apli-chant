@@ -7,7 +7,7 @@ Application Android pour s'entraîner au chant.
 1. **Fichiers** : choisir une musique (MP3 ou WAV) et un backing track (MP3 ou WAV).
 2. **Paroles** : coller les paroles (une ligne par phrase chantée). « Détecter » cale automatiquement
    chaque ligne sur le morceau ; « Caler à la main » permet de corriger en appuyant au début de chaque
-   ligne pendant l'écoute. Cocher des lignes règle l'extrait de la première à la dernière ligne cochée.
+   ligne pendant l'écoute. Cocher des lignes règle l'extrait de la première à la dernière ligne cochée (1 s de marge avant, 1,5 s après).
    Pendant la lecture et l'enregistrement, la ligne en cours s'affiche en gros.
 3. **Extrait** : sélectionner un passage sur la forme d'onde (curseur double + réglages fins ±0,1 s / ±1 s),
    puis écouter l'extrait de la musique ou du backing track.

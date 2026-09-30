@@ -604,8 +604,9 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
         if (!first.timed || !last.timed) {
             return showMessage("Ces lignes n'ont pas encore de timing : lancez la détection ou le calage manuel")
         }
-        // Une seconde d'élan avant la première ligne, une demi-seconde après la dernière.
-        setSelection(first.startMs - 1000, last.endMs + 500)
+        // Une seconde d'élan avant la première ligne, une seconde et demie après la dernière
+        // (la détection coupe souvent la fin de phrase un peu trop tôt).
+        setSelection(first.startMs - 1000, last.endMs + 1500)
     }
 
     /**
