@@ -39,7 +39,7 @@ L'APK est généré dans `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## Détails techniques
 
-- Kotlin + Jetpack Compose (Material 3), Android 8.0+ (API 26).
+- Kotlin + Jetpack Compose (Material 3), Android 7.0+ (API 24).
 - Décodage MP3/WAV avec `MediaExtractor`/`MediaCodec`, ré-échantillonnage à 44,1 kHz.
 - Lecture via `AudioTrack`, enregistrement via `AudioRecord` (source `VOICE_RECOGNITION`, sans AGC).
 - Les prises sont stockées en WAV mono 16 bits dans le stockage interne de l'application.

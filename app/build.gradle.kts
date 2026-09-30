@@ -12,10 +12,10 @@ android {
         // Identifiant changé en v1.2 pour éviter tout conflit avec un reste des premières
         // versions (signées avec d'autres clés) encore présent sur le téléphone.
         applicationId = "com.aplichant.app"
-        minSdk = 26
+        minSdk = 24
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
     }
 
     // Clé de signature fixe (versionnée) : sans elle, chaque compilation sur GitHub signerait
@@ -26,6 +26,9 @@ android {
             storePassword = "aplichant"
             keyAlias = "aplichant"
             keyPassword = "aplichant"
+            // Double signature (v1 + v2) pour la compatibilité avec un maximum de téléphones.
+            enableV1Signing = true
+            enableV2Signing = true
         }
     }
 
