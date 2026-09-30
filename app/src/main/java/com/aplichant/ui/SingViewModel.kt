@@ -28,11 +28,22 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-enum class Mode { IDLE, PREPARING, PLAYING_SONG, PLAYING_BACKING, RECORDING, PLAYING_VOICE, PLAYING_MIX }
+enum class Mode { IDLE, PREPARING, PLAYING_SONG, PLAYING_BACKING, RECORDING, RECORDING_SOLO, PLAYING_VOICE, PLAYING_MIX }
 
-/** Une prise de voix enregistrée sur l'extrait [startMs, endMs]. */
-data class Take(val file: File, val startMs: Long, val endMs: Long, val label: String) {
+/**
+ * Une prise de voix. [withBacking] : enregistrée sur le backing de l'extrait [startMs, endMs]
+ * (sinon enregistrée seule, sans backing). [name] : nom donné lors de la sauvegarde, ou null.
+ */
+data class Take(
+    val file: File,
+    val startMs: Long,
+    val endMs: Long,
+    val label: String,
+    val withBacking: Boolean,
+    val name: String?,
+) {
     val durationMs: Long get() = ((file.length() - 44) / 2) * 1000 / ENGINE_RATE
+    val saved: Boolean get() = name != null
 }
 
 data class UiState(
@@ -49,6 +60,8 @@ data class UiState(
     val mode: Mode = Mode.IDLE,
     /** Position de lecture dans la chronologie du morceau (ms), ou null. */
     val positionMs: Long? = null,
+    /** Durée écoulée de l'enregistrement en cours (ms). */
+    val recordElapsedMs: Long = 0,
     val inputLevel: Float = 0f,
     val takes: List<Take> = emptyList(),
     val selectedTake: Take? = null,
@@ -61,10 +74,14 @@ data class UiState(
     val timelineMs: Long get() = if (songDurationMs > 0) songDurationMs else backingDurationMs
 }
 
+private const val MAX_SOLO_MS = 10 * 60 * 1000L
+
 class SingViewModel(app: Application) : AndroidViewModel(app) {
 
     private val prefs = app.getSharedPreferences("aplichant", 0)
     private val takesDir = File(app.filesDir, "takes").apply { mkdirs() }
+    /** Noms donnés aux prises sauvegardées (nom du fichier -> nom). */
+    private val names = app.getSharedPreferences("take_names", 0)
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -229,7 +246,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 _state.update { it.copy(message = "Erreur audio : ${e.message}") }
             } finally {
-                _state.update { it.copy(mode = Mode.IDLE, positionMs = null, inputLevel = 0f) }
+                _state.update { it.copy(mode = Mode.IDLE, positionMs = null, inputLevel = 0f, recordElapsedMs = 0) }
             }
         }
     }
@@ -294,30 +311,58 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
                     // On retire ce qui a été capté avant le démarrage du backing.
                     val from = playStartFrame.toInt().coerceIn(0, raw.size)
                     val voice = raw.copyOfRange(from, raw.size)
-                    if (voice.size > ENGINE_RATE / 2) saveTake(voice, s.startMs, s.endMs)
+                    if (voice.size > ENGINE_RATE / 2) saveTake(voice, s.startMs, s.endMs, withBacking = true)
                 }
             }
         }
     }
 
-    private fun saveTake(voice: ShortArray, start: Long, end: Long) {
+    /** Enregistre la voix seule, sans backing, jusqu'à l'appui sur Stop (10 min max). */
+    fun recordSolo() {
+        val s = _state.value
+        launchExclusive {
+            val recorder = VoiceRecorder()
+            withContext(Dispatchers.IO) { recorder.start() }
+            _state.update { it.copy(mode = Mode.RECORDING_SOLO, recordElapsedMs = 0) }
+            try {
+                while (!stopRequested) {
+                    val elapsed = recorder.framesRecorded * 1000 / ENGINE_RATE
+                    _state.update { it.copy(inputLevel = recorder.level, recordElapsedMs = elapsed) }
+                    if (elapsed >= MAX_SOLO_MS) break
+                    delay(50)
+                }
+            } finally {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    val voice = recorder.stop()
+                    if (voice.size > ENGINE_RATE / 2) {
+                        saveTake(voice, s.startMs, s.startMs + voice.size * 1000L / ENGINE_RATE, withBacking = false)
+                    }
+                }
+                _state.update { it.copy(recordElapsedMs = 0) }
+            }
+        }
+    }
+
+    private fun saveTake(voice: ShortArray, start: Long, end: Long, withBacking: Boolean) {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.FRANCE).format(Date())
-        val file = File(takesDir, "prise_${stamp}_${start}_${end}.wav")
+        val suffix = if (withBacking) "" else "_solo"
+        val file = File(takesDir, "prise_${stamp}_${start}_${end}$suffix.wav")
         Wav.write(file, voice, 1, ENGINE_RATE)
         loadTakes()
         _state.update { st -> st.copy(selectedTake = st.takes.firstOrNull { it.file == file }) }
     }
 
     private fun loadTakes() {
-        val regex = Regex("""prise_(\d{8})_(\d{6})_(\d+)_(\d+)\.wav""")
+        val regex = Regex("""prise_(\d{8})_(\d{6})_(\d+)_(\d+)(_solo)?\.wav""")
         val takes = (takesDir.listFiles() ?: emptyArray())
             .mapNotNull { f ->
                 val m = regex.matchEntire(f.name) ?: return@mapNotNull null
-                val (d, t, a, b) = m.destructured
+                val (d, t, a, b, solo) = m.destructured
                 val label = "${d.substring(6, 8)}/${d.substring(4, 6)} ${t.substring(0, 2)}:${t.substring(2, 4)}:${t.substring(4, 6)}"
-                Take(f, a.toLong(), b.toLong(), label)
+                Take(f, a.toLong(), b.toLong(), label, withBacking = solo.isEmpty(), name = names.getString(f.name, null))
             }
-            .sortedByDescending { it.file.name }
+            // Les prises sauvegardées d'abord, puis les plus récentes.
+            .sortedWith(compareBy<Take> { !it.saved }.thenByDescending { it.file.name })
         _state.update { st ->
             st.copy(
                 takes = takes,
@@ -331,6 +376,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
     fun deleteTake(take: Take) {
         if (_state.value.mode != Mode.IDLE) stop()
         take.file.delete()
+        names.edit().remove(take.file.name).apply()
         if (_state.value.selectedTake?.file == take.file) _state.update { it.copy(selectedTake = null) }
         loadTakes()
     }
@@ -356,7 +402,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
             val st = _state.value
             val pcm = withContext(Dispatchers.Default) {
                 val voice = Wav.read(take.file)
-                voiceStereo(voice, latencyFrames(st.latencyMs), st.voiceVolume)
+                voiceStereo(voice, takeLatencyFrames(take, st.latencyMs), st.voiceVolume)
             }
             playWithCursor(pcm, Mode.PLAYING_VOICE, take.startMs)
         }
@@ -364,13 +410,14 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
 
     fun playMix() {
         val take = _state.value.selectedTake ?: return showMessage("Aucune prise sélectionnée")
+        if (!take.withBacking) return showMessage("Cette prise a été enregistrée sans backing")
         val uri = _state.value.backingUri ?: return showMessage("Choisissez d'abord un backing track")
         launchExclusive {
             _state.update { it.copy(mode = Mode.PREPARING) }
             val st = _state.value
             val backing = decodeExcerpt(uri, take.startMs, take.endMs)
             val mix = withContext(Dispatchers.Default) {
-                val voice = voiceStereo(Wav.read(take.file), latencyFrames(st.latencyMs), st.voiceVolume)
+                val voice = voiceStereo(Wav.read(take.file), takeLatencyFrames(take, st.latencyMs), st.voiceVolume)
                 val out = ShortArray(maxOf(backing.size, voice.size))
                 for (i in out.indices) {
                     val b = if (i < backing.size) backing[i] * st.backingVolume else 0f
@@ -384,6 +431,48 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     private fun latencyFrames(ms: Int) = (ms.toLong() * ENGINE_RATE / 1000).toInt()
+
+    /** La compensation de latence ne concerne que les prises enregistrées sur le backing. */
+    private fun takeLatencyFrames(take: Take, ms: Int) = if (take.withBacking) latencyFrames(ms) else 0
+
+    // ---------------------------------------------------------------- Sauvegarde / export
+
+    /** Donne un nom à une prise pour la garder dans « Mes voix sauvegardées ». */
+    fun saveTakeAs(take: Take, name: String) {
+        val clean = name.trim().ifEmpty { "Voix du ${take.label}" }
+        names.edit().putString(take.file.name, clean).apply()
+        loadTakes()
+        showMessage("Voix sauvegardée : $clean")
+    }
+
+    /** Nom de fichier proposé pour l'export de la voix seule. */
+    fun exportFileName(take: Take): String {
+        val base = (take.name ?: "voix_${take.file.nameWithoutExtension.removePrefix("prise_")}")
+            .replace(Regex("""[\\/:*?"<>|]"""), "_")
+        return "$base.wav"
+    }
+
+    /** Écrit la voix seule (latence compensée) dans le fichier choisi par l'utilisateur. */
+    fun exportTake(take: Take, dest: Uri) {
+        val latency = _state.value.latencyMs
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val voice = Wav.read(take.file)
+                    val skip = takeLatencyFrames(take, latency).coerceAtMost(voice.size)
+                    val tmp = File(getApplication<Application>().cacheDir, "export.wav")
+                    Wav.write(tmp, voice.copyOfRange(skip, voice.size), 1, ENGINE_RATE)
+                    getApplication<Application>().contentResolver.openOutputStream(dest)?.use { out ->
+                        tmp.inputStream().use { it.copyTo(out) }
+                    } ?: error("impossible d'ouvrir le fichier de destination")
+                    tmp.delete()
+                }
+                showMessage("Fichier exporté")
+            } catch (e: Exception) {
+                showMessage("Échec de l'export : ${e.message}")
+            }
+        }
+    }
 
     override fun onCleared() {
         stopRequested = true

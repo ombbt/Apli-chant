@@ -22,7 +22,11 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.LibraryMusic
@@ -30,6 +34,7 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -41,6 +46,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RangeSlider
 import androidx.compose.material3.Scaffold
@@ -53,7 +59,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -84,8 +92,59 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
     val pickBacking = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(vm::onBackingPicked)
     }
+    // Enregistrement demandé en attendant l'autorisation du micro (true = sans backing).
+    var pendingSolo by remember { mutableStateOf(false) }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) vm.record() else vm.showMessage("L'accès au micro est nécessaire pour enregistrer")
+        when {
+            !granted -> vm.showMessage("L'accès au micro est nécessaire pour enregistrer")
+            pendingSolo -> vm.recordSolo()
+            else -> vm.record()
+        }
+    }
+    fun startRecording(solo: Boolean) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            if (solo) vm.recordSolo() else vm.record()
+        } else {
+            pendingSolo = solo
+            micPermission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
+
+    // Export de la voix seule vers le stockage du téléphone.
+    var exporting by remember { mutableStateOf<Take?>(null) }
+    val exportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/wav")) { uri ->
+        val take = exporting
+        if (uri != null && take != null) vm.exportTake(take, uri)
+        exporting = null
+    }
+    var naming by remember { mutableStateOf<Take?>(null) }
+    var deleting by remember { mutableStateOf<Take?>(null) }
+
+    naming?.let { take ->
+        SaveDialog(
+            initial = take.name ?: "",
+            onDismiss = { naming = null },
+            onSave = { name ->
+                vm.saveTakeAs(take, name)
+                naming = null
+            },
+        )
+    }
+    deleting?.let { take ->
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Supprimer cette voix ?") },
+            text = { Text(take.name ?: "Prise du ${take.label}") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteTake(take)
+                    deleting = null
+                }) { Text("Supprimer") }
+            },
+            dismissButton = { TextButton(onClick = { deleting = null }) { Text("Annuler") } },
+        )
     }
 
     LaunchedEffect(state.message) {
@@ -181,15 +240,9 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                 }
                 Spacer(Modifier.height(12.dp))
                 val recording = state.mode == Mode.RECORDING
+                val recordingSolo = state.mode == Mode.RECORDING_SOLO
                 Button(
-                    onClick = {
-                        when {
-                            recording -> vm.stop()
-                            ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-                                PackageManager.PERMISSION_GRANTED -> vm.record()
-                            else -> micPermission.launch(Manifest.permission.RECORD_AUDIO)
-                        }
-                    },
+                    onClick = { if (recording) vm.stop() else startRecording(solo = false) },
                     enabled = recording || (!busy && state.backingUri != null && total(state) > 0),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFD32F2F), contentColor = Color.White),
                     modifier = Modifier.fillMaxWidth().height(56.dp),
@@ -198,7 +251,21 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                     Spacer(Modifier.width(8.dp))
                     Text(if (recording) "Arrêter l'enregistrement" else "Enregistrer ma voix sur le backing")
                 }
-                if (recording) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { if (recordingSolo) vm.stop() else startRecording(solo = true) },
+                    enabled = recordingSolo || !busy,
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                ) {
+                    Icon(
+                        if (recordingSolo) Icons.Filled.Stop else Icons.Filled.Mic,
+                        contentDescription = null,
+                        tint = Color(0xFFD32F2F),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (recordingSolo) "Arrêter (${formatTime(state.recordElapsedMs)})" else "Enregistrer ma voix seule (sans backing)")
+                }
+                if (recording || recordingSolo) {
                     Spacer(Modifier.height(8.dp))
                     Text("Niveau du micro", style = MaterialTheme.typography.labelMedium)
                     LinearProgressIndicator(
@@ -218,7 +285,7 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
             }
 
             // ------------------------------------------------------------ 4. Réécoute
-            Section("4. Réécoute") {
+            Section("4. Réécoute et sauvegarde") {
                 if (state.takes.isEmpty()) {
                     Text("Aucune prise pour l'instant.", style = MaterialTheme.typography.bodyMedium)
                 } else {
@@ -235,13 +302,45 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                                 enabled = !busy,
                             )
                             Column(Modifier.weight(1f)) {
-                                Text("Prise du ${take.label}", fontWeight = FontWeight.Medium)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    if (take.saved) {
+                                        Icon(
+                                            Icons.Filled.Bookmark, contentDescription = "Sauvegardée",
+                                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp),
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                    }
+                                    Text(
+                                        take.name ?: "Prise du ${take.label}",
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
                                 Text(
-                                    "Extrait ${formatTime(take.startMs)} → ${formatTime(take.endMs)}",
+                                    if (take.withBacking) {
+                                        "Sur le backing · ${formatTime(take.startMs)} → ${formatTime(take.endMs)}"
+                                    } else {
+                                        "Sans backing · ${formatTime(take.endMs - take.startMs)}"
+                                    },
                                     style = MaterialTheme.typography.bodySmall,
                                 )
                             }
-                            IconButton(onClick = { vm.deleteTake(take) }, enabled = !busy) {
+                            IconButton(onClick = { naming = take }, enabled = !busy) {
+                                Icon(
+                                    if (take.saved) Icons.Filled.Bookmark else Icons.Filled.BookmarkBorder,
+                                    contentDescription = "Sauvegarder",
+                                )
+                            }
+                            IconButton(
+                                onClick = {
+                                    exporting = take
+                                    exportLauncher.launch(vm.exportFileName(take))
+                                },
+                                enabled = !busy,
+                            ) {
+                                Icon(Icons.Filled.Download, contentDescription = "Exporter la voix seule")
+                            }
+                            IconButton(onClick = { deleting = take }, enabled = !busy) {
                                 Icon(Icons.Filled.Delete, contentDescription = "Supprimer")
                             }
                         }
@@ -251,6 +350,7 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                         PlayButton("Voix seule", state.mode == Mode.PLAYING_VOICE, busy, Modifier.weight(1f),
                             icon = Icons.Filled.RecordVoiceOver, onPlay = vm::playVoice, onStop = vm::stop)
                         PlayButton("Voix + backing", state.mode == Mode.PLAYING_MIX, busy, Modifier.weight(1f),
+                            enabled = state.selectedTake?.withBacking != false,
                             onPlay = vm::playMix, onStop = vm::stop)
                     }
                     Spacer(Modifier.height(12.dp))
@@ -324,18 +424,46 @@ private fun PlayButton(
     busy: Boolean,
     modifier: Modifier = Modifier,
     icon: ImageVector = Icons.Filled.PlayArrow,
+    enabled: Boolean = true,
     onPlay: () -> Unit,
     onStop: () -> Unit,
 ) {
     OutlinedButton(
         onClick = if (playing) onStop else onPlay,
-        enabled = playing || !busy,
+        enabled = playing || (!busy && enabled),
         modifier = modifier,
     ) {
         Icon(if (playing) Icons.Filled.Stop else icon, contentDescription = null)
         Spacer(Modifier.width(4.dp))
         Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
+}
+
+@Composable
+private fun SaveDialog(initial: String, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Sauvegarder la voix") },
+        text = {
+            Column {
+                Text(
+                    "La voix est gardée dans l'application sous ce nom. " +
+                        "Utilisez le bouton de téléchargement pour l'exporter en WAV sur le téléphone.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Nom") },
+                    singleLine = true,
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = { onSave(name) }) { Text("Sauvegarder") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Annuler") } },
+    )
 }
 
 @Composable
