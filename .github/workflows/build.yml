@@ -20,10 +20,11 @@ jobs:
       - name: Vérifier l'APK
         run: |
           BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
-          APK=app/build/outputs/apk/debug/app-debug.apk
+          APK=$(ls app/build/outputs/apk/debug/*.apk)
+          echo "APK_NAME=$(basename "$APK" .apk)" >> "$GITHUB_ENV"
           "$BT/aapt2" dump badging "$APK" | grep -E "package:|launchable-activity|sdkVersion|targetSdkVersion|application-label:"
           "$BT/apksigner" verify --verbose --print-certs "$APK"
       - uses: actions/upload-artifact@v4
         with:
-          name: apli-chant-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: ${{ env.APK_NAME }}
+          path: app/build/outputs/apk/debug/*.apk

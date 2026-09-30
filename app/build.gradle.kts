@@ -55,6 +55,11 @@ android {
     }
 }
 
+// Nom de l'APK avec le numéro de version (ex. apli-chant-v1.3-debug.apk).
+base {
+    archivesName.set("apli-chant-v${android.defaultConfig.versionName}")
+}
+
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2025.04.00")
     implementation(composeBom)

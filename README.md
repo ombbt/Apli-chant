@@ -21,7 +21,7 @@ Les fichiers choisis et la sélection sont mémorisés d'une session à l'autre.
 ## Installer l'APK
 
 À chaque push, la GitHub Action **Build APK** compile l'application : ouvrez l'onglet *Actions* du dépôt,
-choisissez la dernière exécution et téléchargez l'artefact `apli-chant-apk` (un zip contenant `app-debug.apk`).
+choisissez la dernière exécution et téléchargez l'artefact `apli-chant-vX.Y-debug` (un zip contenant `apli-chant-vX.Y-debug.apk`).
 Copiez l'APK sur le téléphone et ouvrez-le (autorisez l'installation depuis des sources inconnues).
 
 L'APK est signé avec une clé fixe (`app/signing.keystore`), ce qui permet d'installer les nouvelles
@@ -35,7 +35,7 @@ Avec Android Studio (ou le SDK Android + JDK 17) :
 ./gradlew assembleDebug
 ```
 
-L'APK est généré dans `app/build/outputs/apk/debug/app-debug.apk`.
+L'APK est généré dans `app/build/outputs/apk/debug/`.
 
 ## Détails techniques
 
