@@ -196,8 +196,13 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                 ) { pickBacking.launch(AUDIO_TYPES) }
             }
 
-            // ------------------------------------------------------------ 2. Extrait
-            Section("2. Extrait") {
+            // ------------------------------------------------------------ 2. Paroles
+            Section("2. Paroles") {
+                LyricsSection(state, busy, vm)
+            }
+
+            // ------------------------------------------------------------ 3. Extrait
+            Section("3. Extrait") {
                 if (state.loadingWaveform) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -217,6 +222,7 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                         endMs = state.endMs,
                         positionMs = state.positionMs,
                     )
+                    if (state.mode != Mode.SYNCING) CurrentLyric(state)
                     RangeSlider(
                         value = state.startMs.toFloat()..state.endMs.toFloat(),
                         onValueChange = { r -> vm.setSelection(r.start.toLong(), r.endInclusive.toLong()) },
@@ -239,8 +245,8 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                 }
             }
 
-            // ------------------------------------------------------------ 3. Enregistrement
-            Section("3. Enregistrement") {
+            // ------------------------------------------------------------ 4. Enregistrement
+            Section("4. Enregistrement") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Filled.Headphones, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
                     Spacer(Modifier.width(8.dp))
@@ -276,6 +282,7 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                     Spacer(Modifier.width(8.dp))
                     Text(if (recordingSolo) "Arrêter (${formatTime(state.recordElapsedMs)})" else "Enregistrer ma voix seule (sans backing)")
                 }
+                if (recording) CurrentLyric(state)
                 if (recording || recordingSolo) {
                     Spacer(Modifier.height(8.dp))
                     Text("Niveau du micro", style = MaterialTheme.typography.labelMedium)
@@ -296,7 +303,7 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
             }
 
             // ------------------------------------------------------------ 4. Réécoute
-            Section("4. Réécoute et sauvegarde") {
+            Section("5. Réécoute et sauvegarde") {
                 if (state.takes.isEmpty()) {
                     Text("Aucune prise pour l'instant.", style = MaterialTheme.typography.bodyMedium)
                 } else {

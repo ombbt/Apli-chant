@@ -14,8 +14,8 @@ android {
         applicationId = "fr.aplichant.chant"
         minSdk = 24
         targetSdk = 35
-        versionCode = 6
-        versionName = "1.5"
+        versionCode = 7
+        versionName = "1.6"
     }
 
     // Clé de signature fixe (versionnée) : sans elle, chaque compilation sur GitHub signerait
@@ -73,4 +73,5 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    testImplementation("junit:junit:4.13.2")
 }

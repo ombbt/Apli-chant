@@ -65,6 +65,39 @@ object AudioDecoder {
     }
 
     /**
+     * Décode le fichier entier en mono à [targetRate] Hz (pour l'analyse, pas pour l'écoute :
+     * ré-échantillonnage simple par moyenne, suffisant pour une analyse d'énergie).
+     */
+    fun decodeMono(
+        context: Context,
+        uri: Uri,
+        targetRate: Int,
+        shouldStop: () -> Boolean = { false },
+    ): ShortArray {
+        val out = ShortBuffer()
+        var acc = 0.0
+        var accN = 0
+        var phase = 0.0
+        decode(context, uri, 0, Long.MAX_VALUE, shouldStop) { pcm, frames, channels, rate, _ ->
+            val step = targetRate.toDouble() / rate
+            for (i in 0 until frames) {
+                var v = 0
+                for (c in 0 until channels) v += pcm[i * channels + c]
+                acc += v.toDouble() / channels
+                accN++
+                phase += step
+                if (phase >= 1.0) {
+                    phase -= 1.0
+                    out.add((acc / accN).toInt().coerceIn(-32768, 32767).toShort())
+                    acc = 0.0
+                    accN = 0
+                }
+            }
+        }
+        return out.toArray()
+    }
+
+    /**
      * Décode le fichier entier et calcule une forme d'onde de [buckets] valeurs (0..1).
      * Renvoie la forme d'onde et la durée en ms.
      */

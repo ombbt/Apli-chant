@@ -5,12 +5,16 @@ Application Android pour s'entraîner au chant.
 ## Fonctionnalités
 
 1. **Fichiers** : choisir une musique (MP3 ou WAV) et un backing track (MP3 ou WAV).
-2. **Extrait** : sélectionner un passage sur la forme d'onde (curseur double + réglages fins ±0,1 s / ±1 s),
+2. **Paroles** : coller les paroles (une ligne par phrase chantée). « Détecter » cale automatiquement
+   chaque ligne sur le morceau ; « Caler à la main » permet de corriger en appuyant au début de chaque
+   ligne pendant l'écoute. Cocher des lignes règle l'extrait de la première à la dernière ligne cochée.
+   Pendant la lecture et l'enregistrement, la ligne en cours s'affiche en gros.
+3. **Extrait** : sélectionner un passage sur la forme d'onde (curseur double + réglages fins ±0,1 s / ±1 s),
    puis écouter l'extrait de la musique ou du backing track.
-3. **Enregistrement** : enregistrer sa voix au micro pendant la lecture du backing track sur l'extrait
+4. **Enregistrement** : enregistrer sa voix au micro pendant la lecture du backing track sur l'extrait
    (vu-mètre du micro affiché), ou **enregistrer la voix seule, sans backing** (jusqu'à l'appui sur Stop,
    10 min max). Utilisez des écouteurs pour que le micro ne capte pas le backing.
-4. **Réécoute et sauvegarde** : chaque prise est conservée ; on peut écouter la **voix seule** ou la
+5. **Réécoute et sauvegarde** : chaque prise est conservée ; on peut écouter la **voix seule** ou la
    **voix + backing**, régler le volume de chacun et compenser la latence du téléphone (décalage de la voix).
    - Icône signet : **sauvegarder** la voix dans l'application sous un nom (elle apparaît en tête de liste).
    - Icône téléchargement : **exporter la voix seule** en WAV vers le stockage du téléphone
@@ -44,6 +48,12 @@ Avec Android Studio (ou le SDK Android + JDK 17) :
 L'APK est généré dans `app/build/outputs/apk/debug/`.
 
 ## Détails techniques
+
+- Détection du timing des paroles sans reconnaissance vocale ni connexion : les spectres de la musique
+  et du backing track sont comparés trame par trame (≈ 23 ms) pour isoler la voix ; les passages chantés
+  obtenus sont répartis sur les lignes selon leur nombre de syllabes (programmation dynamique qui préfère
+  couper sur les silences). Le décalage et l'écart de volume entre les deux fichiers sont estimés
+  automatiquement. Code : `audio/LyricsAligner.kt`, tests : `app/src/test/`.
 
 - Kotlin + Jetpack Compose (Material 3), Android 7.0+ (API 24).
 - Décodage MP3/WAV avec `MediaExtractor`/`MediaCodec`, ré-échantillonnage à 44,1 kHz.

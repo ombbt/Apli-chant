@@ -8,6 +8,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.aplichant.audio.AudioDecoder
 import com.aplichant.audio.ENGINE_RATE
+import com.aplichant.audio.LyricsAligner
 import com.aplichant.audio.VoiceRecorder
 import com.aplichant.audio.Wav
 import com.aplichant.audio.playPcm
@@ -22,13 +23,23 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
-enum class Mode { IDLE, PREPARING, PLAYING_SONG, PLAYING_BACKING, RECORDING, RECORDING_SOLO, PLAYING_VOICE, PLAYING_MIX }
+enum class Mode {
+    IDLE, PREPARING, PLAYING_SONG, PLAYING_BACKING, RECORDING, RECORDING_SOLO, PLAYING_VOICE, PLAYING_MIX,
+    ANALYZING, SYNCING,
+}
+
+/** Une ligne de paroles et son timing dans le morceau (-1 si inconnu). */
+data class LyricLine(val text: String, val startMs: Long = -1, val endMs: Long = -1) {
+    val timed: Boolean get() = startMs >= 0 && endMs > startMs
+}
 
 /**
  * Une prise de voix. [withBacking] : enregistrée sur le backing de l'extrait [startMs, endMs]
@@ -69,7 +80,19 @@ data class UiState(
     val voiceVolume: Float = 1f,
     val backingVolume: Float = 0.8f,
     val message: String? = null,
+    /** Paroles collées par l'utilisateur (une entrée par ligne chantée). */
+    val lyrics: List<LyricLine> = emptyList(),
+    /** Lignes cochées : l'extrait va de la première à la dernière. */
+    val selectedLines: Set<Int> = emptySet(),
+    /** Ligne à caler au prochain appui, en mode calage manuel. */
+    val syncIndex: Int = 0,
 ) {
+    /** Index de la ligne chantée à [positionMs], ou -1. */
+    fun currentLine(): Int {
+        val p = positionMs ?: return -1
+        return lyrics.indexOfLast { it.startMs in 0..p }.takeIf { it >= 0 && p < lyrics[it].endMs + 1500 } ?: -1
+    }
+
     /** Durée maximale sélectionnable : celle du morceau (ou du backing si pas de morceau). */
     val timelineMs: Long get() = if (songDurationMs > 0) songDurationMs else backingDurationMs
 }
@@ -82,6 +105,8 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
     private val takesDir = File(app.filesDir, "takes").apply { mkdirs() }
     /** Noms donnés aux prises sauvegardées (nom du fichier -> nom). */
     private val names = app.getSharedPreferences("take_names", 0)
+    /** Paroles et timings, par musique (URI -> JSON). */
+    private val lyricsPrefs = app.getSharedPreferences("lyrics", 0)
 
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
@@ -135,7 +160,10 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
         val name = displayName(uri)
         viewModelScope.launch {
             if (isSong) {
-                _state.update { it.copy(songUri = uri, songName = name, loadingWaveform = true, waveform = null) }
+                _state.update {
+                    it.copy(songUri = uri, songName = name, loadingWaveform = true, waveform = null,
+                        lyrics = loadLyrics(uri), selectedLines = emptySet())
+                }
                 try {
                     val (wave, duration) = withContext(Dispatchers.Default) {
                         AudioDecoder.waveform(getApplication(), uri, 400)
@@ -225,6 +253,8 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
     private suspend fun decodeExcerpt(uri: Uri, start: Long, end: Long): ShortArray {
         val key = CacheKey(uri, start, end)
         cache[key]?.let { return it }
+        // Long extrait (ex. calage manuel sur tout le morceau) : on libère d'abord la mémoire.
+        if (end - start > 60_000) cache.clear()
         val pcm = withContext(Dispatchers.Default) { AudioDecoder.decodeStereo(getApplication(), uri, start, end) }
         // On ne garde que quelques extraits en mémoire.
         if (cache.size >= 2) cache.clear()
@@ -471,6 +501,164 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
             } catch (e: Exception) {
                 showMessage("Échec de l'export : ${e.message}")
             }
+        }
+    }
+
+    // ---------------------------------------------------------------- Paroles
+
+    private fun loadLyrics(uri: Uri): List<LyricLine> {
+        val json = lyricsPrefs.getString(uri.toString(), null) ?: return emptyList()
+        return try {
+            val arr = JSONArray(json)
+            List(arr.length()) { i ->
+                val o = arr.getJSONObject(i)
+                LyricLine(o.getString("t"), o.optLong("s", -1), o.optLong("e", -1))
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    private fun saveLyrics(lines: List<LyricLine>) {
+        val uri = _state.value.songUri ?: return
+        val arr = JSONArray()
+        lines.forEach { arr.put(JSONObject().put("t", it.text).put("s", it.startMs).put("e", it.endMs)) }
+        lyricsPrefs.edit().putString(uri.toString(), arr.toString()).apply()
+    }
+
+    private fun updateLyrics(lines: List<LyricLine>) {
+        _state.update { it.copy(lyrics = lines) }
+        saveLyrics(lines)
+    }
+
+    /** Texte actuel des paroles, pour le modifier. */
+    fun lyricsText(): String = _state.value.lyrics.joinToString("\n") { it.text }
+
+    /**
+     * Enregistre les paroles collées : une ligne par phrase chantée. Les lignes vides et les
+     * repères du type [Refrain] sont ignorés. Les timings des lignes inchangées sont conservés.
+     */
+    fun setLyricsText(text: String) {
+        if (_state.value.songUri == null) return showMessage("Choisissez d'abord une musique")
+        val old = _state.value.lyrics
+        val lines = text.lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !(it.startsWith("[") && it.endsWith("]")) }
+        val sameText = lines == old.map { it.text }
+        updateLyrics(if (sameText) old else lines.map { LyricLine(it) })
+        _state.update { it.copy(selectedLines = emptySet()) }
+    }
+
+    /** Détection automatique du timing des paroles (musique comparée au backing track). */
+    fun detectLyricsTiming() {
+        val s = _state.value
+        val song = s.songUri ?: return showMessage("Choisissez d'abord une musique")
+        if (s.lyrics.isEmpty()) return showMessage("Collez d'abord les paroles")
+        val backing = s.backingUri
+        launchExclusive {
+            _state.update { it.copy(mode = Mode.ANALYZING) }
+            val times = withContext(Dispatchers.Default) {
+                val ctx = getApplication<Application>()
+                val songPcm = AudioDecoder.decodeMono(ctx, song, LyricsAligner.ANALYSIS_RATE) { stopRequested }
+                val backPcm = backing?.let {
+                    AudioDecoder.decodeMono(ctx, it, LyricsAligner.ANALYSIS_RATE) { stopRequested }
+                }
+                if (stopRequested) return@withContext null
+                val score = LyricsAligner.vocalScore(songPcm, backPcm)
+                val runs = LyricsAligner.voicedRuns(score)
+                LyricsAligner.assignLines(s.lyrics.map { LyricsAligner.syllables(it.text) }, runs, score)
+            }
+            if (stopRequested) return@launchExclusive
+            if (times == null) {
+                showMessage("Aucun passage chanté détecté. Essayez le calage manuel.")
+                return@launchExclusive
+            }
+            val f = LyricsAligner.FRAME_MS
+            updateLyrics(s.lyrics.mapIndexed { i, line ->
+                val (a, b) = times[i]
+                line.copy(startMs = (a * f).toLong(), endMs = (b * f).toLong())
+            })
+            showMessage(
+                if (backing == null) "Timing estimé sans backing track (peu précis) : vérifiez-le"
+                else "Timing détecté : vérifiez en écoutant, et corrigez au besoin avec le calage manuel"
+            )
+        }
+    }
+
+    /** Coche/décoche une ligne ; l'extrait couvre de la première à la dernière ligne cochée. */
+    fun toggleLine(index: Int) {
+        val sel = _state.value.selectedLines.toMutableSet()
+        if (!sel.add(index)) sel.remove(index)
+        _state.update { it.copy(selectedLines = sel) }
+        applyLineSelection()
+    }
+
+    fun clearLineSelection() = _state.update { it.copy(selectedLines = emptySet()) }
+
+    private fun applyLineSelection() {
+        val s = _state.value
+        if (s.selectedLines.isEmpty()) return
+        val lines = s.lyrics
+        val first = lines[s.selectedLines.min()]
+        val last = lines[s.selectedLines.max()]
+        if (!first.timed || !last.timed) {
+            return showMessage("Ces lignes n'ont pas encore de timing : lancez la détection ou le calage manuel")
+        }
+        // Une seconde d'élan avant la première ligne, une demi-seconde après la dernière.
+        setSelection(first.startMs - 1000, last.endMs + 500)
+    }
+
+    /**
+     * Calage manuel : la musique est jouée à partir de la ligne [fromLine] et l'utilisateur appuie
+     * sur « Ligne suivante » au début de chaque ligne.
+     */
+    fun startManualSync(fromLine: Int = 0) {
+        val s = _state.value
+        val song = s.songUri ?: return showMessage("Choisissez d'abord une musique")
+        if (s.lyrics.isEmpty()) return showMessage("Collez d'abord les paroles")
+        val from = fromLine.coerceIn(0, s.lyrics.size - 1)
+        // On démarre 3 s avant la ligne si son timing est connu (sinon au début du morceau).
+        val origin = if (from > 0 && s.lyrics[from].startMs >= 0) maxOf(0, s.lyrics[from].startMs - 3000) else 0L
+        launchExclusive {
+            _state.update { it.copy(mode = Mode.PREPARING, syncIndex = from) }
+            val pcm = decodeExcerpt(song, origin, s.songDurationMs)
+            playWithCursor(pcm, Mode.SYNCING, origin)
+            closeLastSyncedLine()
+        }
+    }
+
+    /** Appui sur « Ligne suivante » pendant le calage manuel. */
+    fun syncTap() {
+        val s = _state.value
+        val pos = s.positionMs ?: return
+        if (s.mode != Mode.SYNCING) return
+        // On compense un peu le temps de réaction.
+        val t = maxOf(0, pos - 120)
+        val lines = s.lyrics.toMutableList()
+        val i = s.syncIndex
+        if (i > 0 && i - 1 < lines.size) {
+            val prev = lines[i - 1]
+            if (prev.startMs >= 0 && prev.startMs < t) lines[i - 1] = prev.copy(endMs = t - 50)
+        }
+        if (i < lines.size) {
+            lines[i] = lines[i].copy(startMs = t, endMs = -1)
+            updateLyrics(lines)
+            _state.update { it.copy(syncIndex = i + 1) }
+        } else {
+            // Dernier appui : fin de la dernière ligne.
+            updateLyrics(lines)
+            stop()
+        }
+    }
+
+    /** À la fin du calage, donne une durée estimée à la dernière ligne calée restée ouverte. */
+    private fun closeLastSyncedLine() {
+        val lines = _state.value.lyrics.toMutableList()
+        val idx = lines.indexOfLast { it.startMs >= 0 && it.endMs < 0 }
+        if (idx >= 0) {
+            val l = lines[idx]
+            lines[idx] = l.copy(endMs = l.startMs + maxOf(1500L, LyricsAligner.syllables(l.text) * 300L))
+            updateLyrics(lines)
         }
     }
 
