@@ -420,6 +420,9 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
                 throw e
             } catch (e: Exception) {
                 _state.update { it.copy(message = "Erreur audio : ${e.message}") }
+            } catch (e: OutOfMemoryError) { // MODIFIÉ (v1.9) : message au lieu d'une fermeture de l'appli
+                cache.clear()
+                _state.update { it.copy(message = "Mémoire insuffisante pour ce morceau : choisissez un extrait plus court") }
             } finally {
                 _state.update { it.copy(mode = Mode.IDLE, positionMs = null, inputLevel = 0f, recordElapsedMs = 0) }
             }

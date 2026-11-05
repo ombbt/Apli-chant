@@ -45,7 +45,10 @@ object AudioDecoder {
         endMs: Long,
         shouldStop: () -> Boolean = { false },
     ): ShortArray {
-        val out = ShortBuffer()
+        // MODIFIÉ (v1.9) : le tampon est réservé dès le départ à la taille de l'extrait.
+        // Avant, il doublait de taille à chaque fois qu'il était plein : au-delà de ~6 min 20,
+        // l'ancien et le nouveau tampon coexistaient (≈ 200 Mo) et Android fermait l'appli.
+        val out = ShortBuffer(estimateStereoSize(context, uri, startMs, endMs))
         var nativeRate = ENGINE_RATE
         decode(context, uri, startMs * 1000, endMs * 1000, shouldStop) { pcm, frames, channels, rate, _ ->
             nativeRate = rate
@@ -60,8 +63,29 @@ object AudioDecoder {
                 out.add(l); out.add(r)
             }
         }
-        val stereo = out.toArray()
+        // MODIFIÉ (v1.9) : pas de copie finale si l'estimation était juste (au plus 0,5 s de silence en fin).
+        val stereo = out.toArrayAllowingSilence(maxPadding = nativeRate)
         return if (nativeRate == ENGINE_RATE) stereo else resampleStereo(stereo, nativeRate, ENGINE_RATE)
+    }
+
+    /**
+     * MODIFIÉ (v1.9) : nombre d'échantillons stéréo attendus pour [startMs, endMs), d'après la
+     * fréquence et la durée indiquées dans le fichier (petite marge de 0,2 s).
+     */
+    private fun estimateStereoSize(context: Context, uri: Uri, startMs: Long, endMs: Long): Int {
+        val extractor = MediaExtractor()
+        return try {
+            extractor.setDataSource(context, uri, null)
+            val format = extractor.getTrackFormat(findAudioTrack(extractor))
+            val rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+            val fileMs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION) / 1000 else endMs
+            val ms = (minOf(endMs, fileMs) - startMs).coerceAtLeast(0) + 200
+            (ms * rate / 1000 * 2).coerceIn(1L shl 16, Int.MAX_VALUE.toLong()).toInt()
+        } catch (_: Exception) {
+            1 shl 16
+        } finally {
+            extractor.release()
+        }
     }
 
     /**
@@ -289,7 +313,8 @@ class ShortBuffer(initial: Int = 1 shl 16) {
         private set
 
     fun add(v: Short) {
-        if (size == data.size) data = data.copyOf(data.size * 2)
+        // MODIFIÉ (v1.9) : agrandissement de 25 % au lieu de doubler (moins de mémoire si l'estimation est un peu juste).
+        if (size == data.size) data = data.copyOf(data.size + data.size / 4 + 1024)
         data[size++] = v
     }
 
@@ -304,4 +329,12 @@ class ShortBuffer(initial: Int = 1 shl 16) {
     }
 
     fun toArray(): ShortArray = data.copyOf(size)
+
+    /**
+     * MODIFIÉ (v1.9) : pour la lecture uniquement. Si le tampon est presque plein (il manque moins de
+     * [maxPadding] échantillons), on le renvoie tel quel, sans le recopier : la fin non remplie est un
+     * court silence. Sinon, copie à la bonne taille comme [toArray].
+     */
+    fun toArrayAllowingSilence(maxPadding: Int): ShortArray =
+        if (data.size - size <= maxPadding) data else data.copyOf(size)
 }

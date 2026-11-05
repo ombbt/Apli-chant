@@ -302,6 +302,18 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                     Spacer(Modifier.width(8.dp))
                     Text(if (recordingSolo) "Arrêter (${formatTime(state.recordElapsedMs)})" else "Enregistrer ma voix seule (sans backing)")
                 }
+                // MODIFIÉ (v1.9) : boutons de réécoute déplacés ici depuis la section 5,
+                // pour réécouter la prise sélectionnée sans faire défiler l'écran.
+                if (state.takes.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        PlayButton("Voix seule", state.mode == Mode.PLAYING_VOICE, busy, Modifier.weight(1f),
+                            icon = Icons.Filled.RecordVoiceOver, onPlay = vm::playVoice, onStop = vm::stop)
+                        PlayButton("Voix + backing", state.mode == Mode.PLAYING_MIX, busy, Modifier.weight(1f),
+                            enabled = state.selectedTake?.withBacking != false,
+                            onPlay = vm::playMix, onStop = vm::stop)
+                    }
+                }
                 if (recording) CurrentLyric(state)
                 if (recording || recordingSolo) {
                     Spacer(Modifier.height(8.dp))
@@ -383,14 +395,7 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        PlayButton("Voix seule", state.mode == Mode.PLAYING_VOICE, busy, Modifier.weight(1f),
-                            icon = Icons.Filled.RecordVoiceOver, onPlay = vm::playVoice, onStop = vm::stop)
-                        PlayButton("Voix + backing", state.mode == Mode.PLAYING_MIX, busy, Modifier.weight(1f),
-                            enabled = state.selectedTake?.withBacking != false,
-                            onPlay = vm::playMix, onStop = vm::stop)
-                    }
+                    // MODIFIÉ (v1.9) : boutons « Voix seule » / « Voix + backing » déplacés dans la section 4.
                     Spacer(Modifier.height(12.dp))
                     LabeledSlider("Volume voix", state.voiceVolume, 0f..2f, "${(state.voiceVolume * 100).toInt()} %",
                         vm::setVoiceVolume)
