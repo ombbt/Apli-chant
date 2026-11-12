@@ -14,8 +14,8 @@ android {
         applicationId = "fr.aplichant.chant"
         minSdk = 24
         targetSdk = 35
-        versionCode = 10
-        versionName = "1.9"
+        versionCode = 11
+        versionName = "1.10"
     }
 
     // Clé de signature fixe (versionnée) : sans elle, chaque compilation sur GitHub signerait

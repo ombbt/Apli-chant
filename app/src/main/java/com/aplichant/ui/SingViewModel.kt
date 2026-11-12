@@ -92,6 +92,8 @@ data class UiState(
     val selectedLines: Set<Int> = emptySet(),
     /** Ligne à caler au prochain appui, en mode calage manuel. */
     val syncIndex: Int = 0,
+    /** MODIFIÉ (v1.10) : exercice 2 par 2 — première ligne de la paire en cours (null = exercice arrêté). */
+    val exerciseIndex: Int? = null,
 ) {
     /** Index de la ligne chantée à [positionMs], ou -1. */
     fun currentLine(): Int {
@@ -209,6 +211,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
                 startMs = projectPrefs.getLong("start", 0), endMs = projectPrefs.getLong("end", 0),
                 mode = Mode.IDLE, positionMs = null,
                 lyrics = loadLyrics(projectId = id), selectedLines = selected, syncIndex = 0,
+                exerciseIndex = null, // MODIFIÉ (v1.10)
                 takes = emptyList(), selectedTake = null,
             )
         }
@@ -697,6 +700,7 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
         val sameText = lines == old.map { it.text }
         updateLyrics(if (sameText) old else lines.map { LyricLine(it) })
         setSelectedLines(emptySet())
+        _state.update { it.copy(exerciseIndex = null) } // MODIFIÉ (v1.10) : paroles changées, exercice arrêté
     }
 
     /** Détection automatique du timing des paroles (musique comparée au backing track). */
@@ -739,11 +743,15 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
     fun toggleLine(index: Int) {
         val sel = _state.value.selectedLines.toMutableSet()
         if (!sel.add(index)) sel.remove(index)
+        _state.update { it.copy(exerciseIndex = null) } // MODIFIÉ (v1.10) : cocher à la main arrête l'exercice
         setSelectedLines(sel)
         applyLineSelection()
     }
 
-    fun clearLineSelection() = setSelectedLines(emptySet())
+    fun clearLineSelection() {
+        _state.update { it.copy(exerciseIndex = null) } // MODIFIÉ (v1.10) : « Tout décocher » arrête l'exercice
+        setSelectedLines(emptySet())
+    }
 
     /** Lignes cochées, mémorisées dans le projet. */
     private fun setSelectedLines(lines: Set<Int>) {
@@ -764,6 +772,39 @@ class SingViewModel(app: Application) : AndroidViewModel(app) {
         // (la détection coupe souvent la fin de phrase un peu trop tôt).
         setSelection(first.startMs - 1000, last.endMs + 1500)
     }
+
+    // MODIFIÉ (v1.10) -------------------------------------------------- Exercice 2 par 2
+    // L'exercice ne fait que sélectionner deux lignes consécutives (1-2, puis 2-3, puis 3-4…) ;
+    // on enregistre et on réécoute ensuite avec les boutons habituels.
+
+    /** Démarre l'exercice sur les lignes 1 et 2. */
+    fun startExercise() {
+        if (_state.value.lyrics.isEmpty()) return showMessage("Collez d'abord les paroles")
+        exerciseGo(0)
+    }
+
+    /** Paire suivante (+1) ou précédente (-1). */
+    fun exerciseStep(delta: Int) {
+        val i = _state.value.exerciseIndex ?: return
+        exerciseGo(i + delta)
+    }
+
+    /** Arrête l'exercice (les deux lignes restent cochées). */
+    fun stopExercise() = _state.update { it.copy(exerciseIndex = null) }
+
+    /** Dernière première-ligne possible : l'avant-dernière ligne (ou 0 s'il n'y a qu'une ligne). */
+    private fun lastExerciseIndex() = maxOf(0, _state.value.lyrics.size - 2)
+
+    private fun exerciseGo(index: Int) {
+        val i = index.coerceIn(0, lastExerciseIndex())
+        val pair = setOf(i, minOf(i + 1, _state.value.lyrics.size - 1))
+        _state.update { it.copy(exerciseIndex = i) }
+        setSelectedLines(pair)
+        applyLineSelection() // l'extrait va de la 1re à la 2e ligne (avec les marges habituelles)
+    }
+
+    /** Nombre de paires de l'exercice, pour l'affichage « 3 / 19 ». */
+    fun exercisePairCount() = lastExerciseIndex() + 1
 
     /**
      * Calage manuel : la musique est jouée à partir de la ligne [fromLine] et l'utilisateur appuie

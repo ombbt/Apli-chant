@@ -35,6 +35,9 @@ import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.filled.SkipNext // MODIFIÉ (v1.10)
+import androidx.compose.material.icons.filled.SkipPrevious // MODIFIÉ (v1.10)
+import androidx.compose.material.icons.filled.FormatListNumbered // MODIFIÉ (v1.10)
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -276,6 +279,8 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
                     )
                 }
                 Spacer(Modifier.height(12.dp))
+                // MODIFIÉ (v1.10) : exercice 2 par 2 — sélectionne seulement les lignes à travailler.
+                ExerciseBar(state, busy, vm)
                 val recording = state.mode == Mode.RECORDING
                 val recordingSolo = state.mode == Mode.RECORDING_SOLO
                 Button(
@@ -416,6 +421,41 @@ fun SingScreen(vm: SingViewModel = viewModel()) {
 }
 
 private fun total(state: UiState) = state.timelineMs
+
+/**
+ * MODIFIÉ (v1.10) : exercice 2 par 2. Arrêté : un bouton pour le lancer. En cours : la paire de lignes,
+ * et les boutons Précédent / Suivant / Quitter. L'enregistrement et la réécoute restent les boutons habituels.
+ */
+@Composable
+private fun ExerciseBar(state: UiState, busy: Boolean, vm: SingViewModel) {
+    if (state.lyrics.isEmpty()) return
+    val i = state.exerciseIndex
+    if (i == null) {
+        OutlinedButton(onClick = vm::startExercise, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Filled.FormatListNumbered, contentDescription = null)
+            Spacer(Modifier.width(8.dp))
+            Text("Exercice 2 par 2")
+        }
+    } else {
+        val second = minOf(i + 1, state.lyrics.size - 1)
+        Text(
+            "Exercice 2 par 2 · lignes ${i + 1} et ${second + 1} (${i + 1} / ${vm.exercisePairCount()})",
+            style = MaterialTheme.typography.labelLarge,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            OutlinedButton(onClick = { vm.exerciseStep(-1) }, enabled = !busy && i > 0, modifier = Modifier.weight(1f)) {
+                Icon(Icons.Filled.SkipPrevious, contentDescription = null)
+                Text("Précédent", maxLines = 1)
+            }
+            Button(onClick = { vm.exerciseStep(1) }, enabled = !busy && i < vm.exercisePairCount() - 1, modifier = Modifier.weight(1f)) {
+                Text("Suivant", maxLines = 1)
+                Icon(Icons.Filled.SkipNext, contentDescription = null)
+            }
+        }
+        TextButton(onClick = vm::stopExercise, enabled = !busy) { Text("Quitter l'exercice") }
+    }
+    Spacer(Modifier.height(8.dp))
+}
 
 @Composable
 private fun Section(title: String, content: @Composable () -> Unit) {
